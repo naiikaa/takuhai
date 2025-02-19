@@ -3,9 +3,10 @@ Takuhai is a CLI Chat application that was developed as the final project for th
 
 The main goal of the lecture was to learn implementing various different cryptographic algorithms that were or are used in applications around the world. 
 
-This implementation provides a [Client]() and [Server]() pair that can be started individually via terminals. Clients can then register to the server and send messages to other registered clients.
+This implementation provides a [Client](client.py) and [Server](server.py) pair that can be started individually via terminals. Clients can then register to the server and send messages to other registered clients.
 
 ## Project requirements 
+
 Design and Implementation of a secure messaging system. The goal is to integrate cryptographic protocols to provide confidentiality, integrity, authenticity as well as forwards and backwards secrecy.
 
 The implementation should include the following four phases:
