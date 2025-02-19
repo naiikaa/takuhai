@@ -5,7 +5,6 @@ import json
 import time
 
 from utils.cryptographic_utils import sample_curve_key_pair
-from utils.msg_handler import client_handler
 from utils.constants import *
 
 
@@ -28,6 +27,27 @@ class Client:
                 print(f"Failed to connect to server.")
                 print("Retrying in 2 seconds...")
                 time.sleep(2)
+
+    def client_handle_message(msg):
+        print(f"{msg['sender']}: {msg['message']}")
+
+    def handle_system_message(msg):
+        print(f"System: {msg['message']}")
+
+    def handle_login_response(msg):
+        pass
+
+    def handle_register_response(msg):
+        pass
+
+
+    client_handler = {
+        'message' : client_handle_message,
+        'system_message' : handle_system_message,
+        'login_response' : handle_login_response,
+        'register_response' : handle_register_response,
+
+    }
 
     def connect_to_server(self):
         try:
