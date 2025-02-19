@@ -1,0 +1,11 @@
+[project]
+name = "takuhai"
+version = "0.1.0"
+description = "Takuhai is a CLI Chat application that was developed as the final project for the lecture `Cryptographic Engineering` in the computer science masters program of the University of Kassel."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=44.0.1",
+    "ecdsa>=0.19.0",
+    "pycryptodomex>=3.21.0",
+]
