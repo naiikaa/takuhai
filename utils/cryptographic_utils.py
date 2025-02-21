@@ -14,7 +14,7 @@ import json
 from ecdsa.ellipticcurve import Point
 # Use the curve P256, also known as SECP256R1, see https://neuromancer.sk/std/nist/P-256
 from ecdsa import NIST256p as CURVE  
-from database_utils import *
+
 
 HASH_FUNC = hashes.SHA256() # Use SHA256
 hasher = sha256
@@ -26,7 +26,11 @@ a = P256.curve.a()
 b = P256.curve.b()
 p = P256.curve.p()
 n = P256.order
+
 HASH = sha256
+
+def get_order():
+    return n
 
 def point_from_value(value):
     return Point.from_bytes(curve=P256.curve, data=value)
@@ -237,3 +241,26 @@ def HMQV_KServer(ePKc:VerifyingKey, ePKs:VerifyingKey, esks:SigningKey, lPKc:Ver
 
     AEK_SK = hkdf_expand(ss.to_bytes(),b"")
     return AEK_SK
+
+def HMQV_KClient(username,ePKs,ePKc,eskc,key_info):
+    d = int.from_bytes(hasher(ePKc.to_string()+b"Server").digest(),"big") % n
+    e = int.from_bytes(hasher(ePKs.to_string()+username.encode()).digest(),"big") % n
+    lPKs = VerifyingKey.from_string(bytes.fromhex(key_info['lPKs']),curve=CURVE)
+    lskc = SigningKey.from_string(bytes.fromhex(key_info['lskc']),curve=CURVE)
+    ss = (ePKs.pubkey.point + (lPKs.pubkey.point*e))*((eskc.privkey.secret_multiplier+d*lskc.privkey.secret_multiplier)% n)
+    AEK_SK = hkdf_expand(ss.to_bytes(),b"")
+    return AEK_SK
+
+def get_key_conf_key_pair(AKE_SK):
+    K_s = hkdf_expand(AKE_SK,b"K_s")
+    K_c = hkdf_expand(AKE_SK,b"K_c")
+    return K_s, K_c
+
+def create_keyinfo_and_salt(password):
+    salt = int.from_bytes(os.urandom(32),'big') % n
+    rw = hasher(password.encode() + (hash_to_curve(password.encode())*salt).to_bytes()).digest()  
+    print("RW: ", rw)
+    rw_key = hkdf_extract(salt=None, input_key_material=rw)
+    lskc, lPKc = sample_curve_key_pair()
+    lsks, lPKs = sample_curve_key_pair()
+    return salt, rw_key, lskc, lPKc, lsks, lPKs

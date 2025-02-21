@@ -1,2 +1,5 @@
 .venv
-*.crt
+certs/*
+storage/*
+__pycache__/*
+*.pyc

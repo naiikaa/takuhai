@@ -4,10 +4,11 @@ import threading
 import hashlib
 import os
 import json
+import traceback
 from utils.cryptographic_utils import sample_curve_key_pair
-from utils.msg_handler import server_handler
 from utils.constants import * 
 from utils.database_utils import *
+from utils.cryptographic_utils import *
 
 class Server:
     def __init__(self):
@@ -24,14 +25,14 @@ class Server:
         self.user_to_AEK_SK = {}
 
         #check if database exists and create if not
-        if not os.path.exists(self.database_path):
-            with open(self.database_path,"w") as db:
+        if not os.path.exists(DATABASE_PATH):
+            with open(DATABASE_PATH,"w") as db:
                 pass
 
     
     def handle_register(self,client_socket,msg):
         username = msg['username']
-
+        print(f"Registering user {username}")
         if user_exists(username):
             self.send_server_message(client_socket,"User already exists. Try logging in.")
         else:
@@ -41,32 +42,24 @@ class Server:
 
 
 
-    def handle_AKE(client_socket,msg,ePKs,esks,user_to_AEK_SK):
-        username = msg['username']
-        ePKc = msg['ePKc']
-        ePKc = VerifyingKey.from_string(bytes.fromhex(ePKc),curve=CURVE)
-        payload = {"type":"AKE_reaction","ePKs":ePKs.to_string().hex()}
-        client_socket.sendall(json.dumps(payload).encode('utf-8'))
-        lPKc, lsks, lPKs = get_user_keys(username)
-        user_to_AEK_SK[username] = HMQV_KServer(ePKc,ePKs,esks,lPKc,lsks,lPKs,username)
         
 
-    def handle_key_confirmation(client_socket,msg,user_to_AEK_SK):
+    def handle_key_confirmation(self,client_socket,msg):
         username = msg['username']
+        print(f"Key confirmation for {username}")
         mac_c = msg['mac_c']
-        K_s, K_c = hkdf_expand(user_to_AEK_SK[username],b"K_s"), hkdf_expand(user_to_AEK_SK[username],b"K_c")
+        print(f"Key confirmation for {username}")
+        K_s, K_c = get_key_conf_key_pair(self.user_to_AEK_SK[client_socket])
         mac_c2 = hmac_sign(K_c,b"Client KC").hex()
-        mac_s = hmac_sign(K_s,b"Server KC")
         if mac_c == mac_c2:
             print(f"Key confirmation successful for {username}")
-            payload = {"type":"key_confirmation_reaction","mac_s": mac_s.hex()}
-            client_socket.sendall(json.dumps(payload).encode('utf-8'))
         else:
             print(f"Key confirmation failed for {username}")
 
 
     def handle_login(self, client_socket,msg):
-        username = msg['username']           
+        username = msg['username']  
+        print(f"Logging in user {username}")         
         if user_exists(username):
             h_pw_alpha = msg['h(pw)_alpha']
             h_pw_alpha = point_from_value(bytes.fromhex(h_pw_alpha))
@@ -74,7 +67,12 @@ class Server:
             h_pw_alpha_s = h_pw_alpha * salt
             h_pw_alpha_salt = h_pw_alpha_s.to_bytes()
             enc_client_key_info = get_user_enc_client_key_info(username)
-            payload = {"type": "login_reaction", "h(pw)_alpha_salt": h_pw_alpha_salt.hex(), "enc_client_key_info": enc_client_key_info}
+            ePKc = VerifyingKey.from_string(bytes.fromhex(msg['ePKc']),curve=CURVE)
+            lPKc, lsks, lPKs = get_user_keys(username)
+            self.user_to_AEK_SK[client_socket] = HMQV_KServer(ePKc,self.ePKs,self.esks,lPKc,lsks,lPKs,username)
+            K_s, K_c = get_key_conf_key_pair(self.user_to_AEK_SK[client_socket])
+            mac_s = hmac_sign(K_s,b"Server KC").hex()
+            payload = {"type": "login_response", "h(pw)_alpha_salt": h_pw_alpha_salt.hex(), "enc_client_key_info": enc_client_key_info, "ePKs": self.ePKs.to_string().hex(), "mac_s": mac_s}
             client_socket.sendall(json.dumps(payload).encode('utf-8'))
         else:  
 
@@ -91,13 +89,12 @@ class Server:
         'login': handle_login,
         'register': handle_register,
         'message': server_handle_message,
-        'AKE': handle_AKE,
         'key_confirmation': handle_key_confirmation,
     }
 
 
     def send_server_message(self,client_socket,message):
-        client_socket.sendall(json.dumps({"type":"server_message","message":message}).encode('utf-8'))
+        client_socket.sendall(json.dumps({"type":"system_message","message":message}).encode('utf-8'))
 
         
     def start(self):
@@ -119,20 +116,22 @@ class Server:
                 type = msg['type']
 
                 if type == 'AKE':
-                    server_handler[type](msg, client_socket, self.ePKs, self.esks, self.user_to_AEK_SK)
+                    self.server_handler[type](self,client_socket,msg)
                 elif type == 'key_confirmation':
-                    server_handler[type](msg, client_socket, self.user_to_AEK_SK)
+                    self.server_handler[type](self,client_socket,msg)
                 else:
-                    server_handler[type](msg, client_socket)
+                    self.server_handler[type](self,client_socket,msg)
 
             except Exception as e:
-                print(f"Error handling connection: {e}")
+                traceback.print_exc()
                 break
     
     def clean_up(self, client_socket):
+
+        self.user_to_AEK_SK.pop(client_socket)
         client_socket.close()
         self.client_threads.remove(threading.current_thread())
-        threading.current_thread().join()
+        print(f"Connection closed with {client_socket.getpeername()}")
 
 if __name__ == "__main__":
     server = Server()
