@@ -9,13 +9,13 @@ from Cryptodome.Cipher import AES
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import os, hashlib
 from hashlib import sha256
-from ecdsa import SigningKey,VerifyingKey, util # pip install ecdsa
+from ecdsa import SigningKey,VerifyingKey, util, ECDH# pip install ecdsa
 import json
 from ecdsa.ellipticcurve import Point
 # Use the curve P256, also known as SECP256R1, see https://neuromancer.sk/std/nist/P-256
 from ecdsa import NIST256p as CURVE  
 
-
+ecdh = ECDH(curve=CURVE) 
 HASH_FUNC = hashes.SHA256() # Use SHA256
 hasher = sha256
 KEY_LEN = 32 # 32 bytes
@@ -195,7 +195,7 @@ def ecdsa_verify(signature, message, public_key):
         return False
 
 # AES-GCM encryption
-def aes_gcm_encrypt(key, plaintext, associated_data):
+def aes_gcm_encrypt(key, plaintext, associated_data=b""):
     iv = os.urandom(12)  # GCM mode standard IV size is 96 bits (12 bytes)
     encryptor = Cipher(
         algorithms.AES(key),
@@ -264,3 +264,15 @@ def create_keyinfo_and_salt(password):
     lskc, lPKc = sample_curve_key_pair()
     lsks, lPKs = sample_curve_key_pair()
     return salt, rw_key, lskc, lPKc, lsks, lPKs
+
+def verify_key_bundle(key_bundle):
+        IPK = VerifyingKey.from_string(bytes.fromhex(key_bundle['IPK']),curve=CURVE)
+        SPK = VerifyingKey.from_string(bytes.fromhex(key_bundle['SPK']),curve=CURVE)
+        OPK = VerifyingKey.from_string(bytes.fromhex(key_bundle['OPK']),curve=CURVE)
+        key_bundle_sign = bytes.fromhex(key_bundle['signature'])
+        if ecdsa_verify(key_bundle_sign, SPK.to_pem(), IPK):
+            print("Key bundle verified")
+            return True
+        else:
+            print("Key bundle verification failed")
+            return False

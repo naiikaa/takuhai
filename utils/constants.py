@@ -5,3 +5,5 @@ MSG_SIZE = 1024*4
 CERT_PATH = './certs/tls.pem'
 CERT_KEY_PATH = './certs/tls.key'
 DATABASE_PATH = './storage/database.txt'
+X3DH_STORAGE_PATH = './storage/x3dh_bundles.txt'
+LOCAL_USERS_FOLDER = './storage/users/'

@@ -51,3 +51,39 @@ def register_user(msg):
     with open(DATABASE_PATH,"a") as db:
         writable_json = json.dumps({"username":username, "salt":salt, "server_key_info":server_key_info, "enc_client_key_info": {"iv":iv.hex(), "cipher":cipher.hex(), "tag":tag.hex()}})
         db.write(writable_json+"\n")
+
+def create_x3dh_key_info(username:str):
+    storage_path = LOCAL_USERS_FOLDER+username+".txt"
+    if not os.path.exists(storage_path):
+        with open(storage_path,"w") as db:
+            ik ,IPK  = sample_curve_key_pair()
+            sk ,SPK = sample_curve_key_pair()
+            ok ,OPK = sample_curve_key_pair()
+            db.write(json.dumps({"ik":ik.to_pem().hex(),"IPK":IPK.to_pem().hex(),
+                                    "sk":sk.to_pem().hex(),"SPK":SPK.to_pem().hex(),
+                                    "ok":ok.to_pem().hex(),"OPK":OPK.to_pem().hex()}) + "\n")
+    else:
+        with open(storage_path) as db:
+            line = json.loads(db.readline())
+            ik = SigningKey.from_pem(bytes.fromhex(line['ik']))
+            IPK = VerifyingKey.from_pem(bytes.fromhex(line['IPK']))
+            sk = SigningKey.from_pem(bytes.fromhex(line['sk']))
+            SPK = VerifyingKey.from_pem(bytes.fromhex(line['SPK']))
+            ok = SigningKey.from_pem(bytes.fromhex(line['ok']))
+            OPK = VerifyingKey.from_pem(bytes.fromhex(line['OPK']))
+    return ik, IPK, sk, SPK, ok, OPK
+
+def store_x3dh(msg):
+    username = msg['username']
+    payload = {"username":username,"IPK":msg['IPK'],"SPK":msg['SPK'],"OPK":msg['OPK'], "signature":msg['signature']}
+    with open(X3DH_STORAGE_PATH,"a") as db:
+        db.write(json.dumps(payload)+"\n")
+    print(f"Stored X3DH keybundle of {username}")
+
+def get_x3dh_keybundle(target:str):
+    with open(X3DH_STORAGE_PATH,"r") as db:
+        for line in db:
+            line = json.loads(line)
+            if line['username'] == target:
+                return line
+    return None
