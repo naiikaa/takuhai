@@ -14,7 +14,7 @@ import json
 from ecdsa.ellipticcurve import Point
 # Use the curve P256, also known as SECP256R1, see https://neuromancer.sk/std/nist/P-256
 from ecdsa import NIST256p as CURVE  
-
+import time
 ecdh = ECDH(curve=CURVE) 
 HASH_FUNC = hashes.SHA256() # Use SHA256
 hasher = sha256
@@ -276,3 +276,113 @@ def verify_key_bundle(key_bundle):
         else:
             print("Key bundle verification failed")
             return False
+        
+def kdf_root(rk, dh_out):
+    """Derives new root key and chain key from DH output"""
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=64,
+        salt=b'',
+        info=b'doubleratchet-root'
+    )
+    derived = hkdf.derive(rk + dh_out.to_bytes())
+    return derived[:32], derived[32:]
+
+def kdf_chain(ck):
+    """Generates message key and next chain key"""
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=64,
+        salt=b'',
+        info=b'doubleratchet-chain'
+    )
+    print("ck: ", ck)
+    derived = hkdf.derive(ck)
+    return derived[:32], derived[32:]
+
+def curve_potence( sk, PK):
+    sk_ecdh = ECDH(CURVE)
+    sk_ecdh.load_private_key(sk)
+    sk_ecdh.load_received_public_key_bytes(PK.to_string())
+    ss = sk_ecdh.generate_sharedsecret_bytes()
+    return ss
+
+class Ratchet():
+    def __init__(self,root_key,sk=None,PK=None):
+        self.root_key = root_key
+        self.sk = sk
+        self.PK = PK
+        self.chain_key = curve_potence(sk,PK) if sk is not None else None
+        self.sequence = 0
+        self.prev_chain_length = 0
+
+        
+class DoubleRatchet():
+    def __init__(self, root_key, sk=None, PK=None):
+        self.root_key = root_key
+
+        self.send_ratchet = Ratchet(root_key, sk=sk, PK=PK)
+        self.receive_ratchet = Ratchet(root_key, sk=sk, PK=PK)
+        self.skipped_keys = {}
+        self.max_skips = 1000
+
+    def ratchet_encrypt(self, plaintext):
+        
+        # Generate message key
+        msg_key, next_ck = kdf_chain(self.send_ratchet.chain_key)
+        self.send_ratchet.chain_key = next_ck
+        self.send_ratchet.sequence += 1
+        
+        
+        # Encrypt plaintext
+        cipher = aes_gcm_encrypt(msg_key, plaintext)
+        return {
+            'PK': self.send_ratchet.PK.to_string().hex(),
+            'sequence': self.send_ratchet.sequence,
+            'iv': cipher[0].hex(),
+            'cipher': cipher[1].hex(),
+            'tag': cipher[2].hex()
+        }
+    
+       
+    def ratchet_decrypt(self, message):        
+        # Handle skipped messages
+        if message['sequence'] < self.receive_ratchet.sequence:
+            return self.handle_skipped_message(message)
+        
+        # Advance chain to target sequence
+        while self.receive_ratchet.sequence < message['sequence']:
+            msg_key, next_ck = kdf_chain(self.receive_ratchet.chain_key)
+            if self.receive_ratchet.sequence < message['sequence']:
+                self.store_skipped_key(message, msg_key)
+            self.receive_ratchet.chain_key = next_ck
+            self.receive_ratchet.sequence += 1
+        
+        iv = bytes.fromhex(message['iv'])
+        cipher = bytes.fromhex(message['cipher'])
+        tag = bytes.fromhex(message['tag'])
+
+        # Decrypt payload
+        return aes_gcm_decrypt(msg_key, iv, cipher, b"", tag)
+    
+    def store_skipped_key(self, msg, key):
+        if len(self.skipped_keys) > self.max_skips:
+            oldest = min(self.skipped_keys.keys())
+            del self.skipped_keys[oldest]
+        
+        self.skipped_keys[msg['sequence']] = {
+            'key': key,
+            'header': msg,
+            'timestamp': time.time()
+        }
+
+    def handle_skipped_message(self, msg):
+        if msg['sequence'] not in self.skipped_keys:
+            raise KeyError("Missing key for skipped message")
+        
+        entry = self.skipped_keys.pop(msg['sequence'])
+        iv = bytes.fromhex(entry['header']['iv'])
+        cipher = bytes.fromhex(entry['header']['cipher'])
+        tag = bytes.fromhex(entry['header']['tag'])
+        return aes_gcm_decrypt(entry['key'], iv, cipher, b"", tag)
+    

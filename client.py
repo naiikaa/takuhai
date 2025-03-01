@@ -33,6 +33,7 @@ class Client:
         self.ik, self.IPK, self.sk, self.SPK, self.ok, self.OPK = create_x3dh_key_info(self.username)
         self.key_bundle_sign = ecdsa_sign(message=self.SPK.to_pem(),private_key=self.ik,nonce=b"")
         self.X3DH_bundles = {}
+        self.double_ratchet = None
 
 
         while True:
