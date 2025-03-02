@@ -285,7 +285,7 @@ def kdf_root(rk, dh_out):
         salt=b'',
         info=b'doubleratchet-root'
     )
-    derived = hkdf.derive(rk + dh_out.to_bytes())
+    derived = hkdf.derive(rk + dh_out)
     return derived[:32], derived[32:]
 
 def kdf_chain(ck):
@@ -296,7 +296,6 @@ def kdf_chain(ck):
         salt=b'',
         info=b'doubleratchet-chain'
     )
-    print("ck: ", ck)
     derived = hkdf.derive(ck)
     return derived[:32], derived[32:]
 
@@ -307,82 +306,59 @@ def curve_potence( sk, PK):
     ss = sk_ecdh.generate_sharedsecret_bytes()
     return ss
 
-class Ratchet():
-    def __init__(self,root_key,sk=None,PK=None):
-        self.root_key = root_key
-        self.sk = sk
-        self.PK = PK
-        self.chain_key = curve_potence(sk,PK) if sk is not None else None
-        self.sequence = 0
-        self.prev_chain_length = 0
 
-        
 class DoubleRatchet():
-    def __init__(self, root_key, sk=None, PK=None):
+    def __init__(self, root_key,X, x, Y):
         self.root_key = root_key
-
-        self.send_ratchet = Ratchet(root_key, sk=sk, PK=PK)
-        self.receive_ratchet = Ratchet(root_key, sk=sk, PK=PK)
+        self.X = X
+        self.x = x
+        self.Y = Y
+        self.current_dh = None
+        self.send_chain_key , self.send_message_key = None, None
+        self.send_chain_count = 0
+        self.recv_chain_key = None
+        self.recv_message_key = None
+        self.recv_chain_count = 0
         self.skipped_keys = {}
         self.max_skips = 1000
-
-    def ratchet_encrypt(self, plaintext):
-        
-        # Generate message key
-        msg_key, next_ck = kdf_chain(self.send_ratchet.chain_key)
-        self.send_ratchet.chain_key = next_ck
-        self.send_ratchet.sequence += 1
-        
-        
-        # Encrypt plaintext
-        cipher = aes_gcm_encrypt(msg_key, plaintext)
-        return {
-            'PK': self.send_ratchet.PK.to_string().hex(),
-            'sequence': self.send_ratchet.sequence,
-            'iv': cipher[0].hex(),
-            'cipher': cipher[1].hex(),
-            'tag': cipher[2].hex()
-        }
     
-       
-    def ratchet_decrypt(self, message):        
-        # Handle skipped messages
-        if message['sequence'] < self.receive_ratchet.sequence:
-            return self.handle_skipped_message(message)
+    def encrypt(self, message):
+        if self.send_chain_count == 0:
+            print("Generating new chain keys")
+            self.x, self.X = sample_curve_key_pair()
+            self.send_chain_key, self.send_message_key = kdf_root(self.root_key, curve_potence(self.x, self.Y))
         
-        # Advance chain to target sequence
-        while self.receive_ratchet.sequence < message['sequence']:
-            msg_key, next_ck = kdf_chain(self.receive_ratchet.chain_key)
-            if self.receive_ratchet.sequence < message['sequence']:
-                self.store_skipped_key(message, msg_key)
-            self.receive_ratchet.chain_key = next_ck
-            self.receive_ratchet.sequence += 1
-        
+        iv, cipher, tag = aes_gcm_encrypt(self.send_message_key, message)
+        print(self.send_message_key)
+        payload = {"type":"x3dh_encrypted","PK":self.X.to_string().hex(),"counter":self.send_chain_count, "iv":iv.hex(), "cipher":cipher.hex(), "tag":tag.hex()}
+        self.send_chain_count += 1
+        self.send_chain_key, self.send_message_key = kdf_chain(self.send_chain_key)
+
+        if self.recv_chain_count > 0:
+            self.recv_chain_key = None
+            self.recv_chain_count = 0
+
+        return payload
+
+    def decrypt(self, message):
         iv = bytes.fromhex(message['iv'])
         cipher = bytes.fromhex(message['cipher'])
         tag = bytes.fromhex(message['tag'])
+        Y = VerifyingKey.from_string(bytes.fromhex(message['PK']), curve=CURVE)
 
-        # Decrypt payload
-        return aes_gcm_decrypt(msg_key, iv, cipher, b"", tag)
-    
-    def store_skipped_key(self, msg, key):
-        if len(self.skipped_keys) > self.max_skips:
-            oldest = min(self.skipped_keys.keys())
-            del self.skipped_keys[oldest]
-        
-        self.skipped_keys[msg['sequence']] = {
-            'key': key,
-            'header': msg,
-            'timestamp': time.time()
-        }
+        if self.recv_chain_key == None:
+            self.recv_chain_key, self.recv_message_key = kdf_root(self.root_key, curve_potence(self.x, Y))
+        else:
+            self.recv_chain_key, self.recv_message_key = kdf_chain(self.recv_chain_key)
+        print(self.recv_message_key)
+        plaintext = aes_gcm_decrypt(self.recv_message_key, iv, cipher, b"", tag)
+        self.recv_chain_count += 1
+        if Y != self.Y:
+            print("Resetting chain keys")
+            self.Y = Y
+            self.send_chain_count = 0
 
-    def handle_skipped_message(self, msg):
-        if msg['sequence'] not in self.skipped_keys:
-            raise KeyError("Missing key for skipped message")
-        
-        entry = self.skipped_keys.pop(msg['sequence'])
-        iv = bytes.fromhex(entry['header']['iv'])
-        cipher = bytes.fromhex(entry['header']['cipher'])
-        tag = bytes.fromhex(entry['header']['tag'])
-        return aes_gcm_decrypt(entry['key'], iv, cipher, b"", tag)
+        return plaintext
+
     
+        
