@@ -33,7 +33,8 @@ class Client:
         self.ik, self.IPK, self.sk, self.SPK, self.ok, self.OPK = create_x3dh_key_info(self.username)
         self.key_bundle_sign = ecdsa_sign(message=self.SPK.to_pem(),private_key=self.ik,nonce=b"")
         self.X3DH_bundles = {}
-        self.double_ratchet = None
+        self.double_ratchets = {}
+        self.ek, self.EPK = None, None
 
 
         while True:
@@ -52,7 +53,7 @@ class Client:
         msg = aes_gcm_decrypt(self.AEK_SK, iv, cipher, b"", tag)
         msg = json.loads(msg)
 
-        decrypted_msg = self.x3dh_decrypt(msg['message'],msg['IPK'],msg['EPK'],msg['OPK'])
+        decrypted_msg = self.x3dh_decrypt(msg['body'],msg['IPK'],msg['EPK'],msg['OPK'],msg['username'])
 
         print(f"{msg['username']}: {decrypted_msg}")
 
@@ -181,27 +182,33 @@ class Client:
         
         return shared_key
 
-    def x3dh_decrypt(self,msg,IPK_A,EPK_A,OPK_A):
-        
-        IPK_A = VerifyingKey.from_string(bytes.fromhex(IPK_A),curve=CURVE)
-        EPK_A = VerifyingKey.from_string(bytes.fromhex(EPK_A),curve=CURVE)
-        OPK_A = VerifyingKey.from_string(bytes.fromhex(OPK_A),curve=CURVE)
-        iv = bytes.fromhex(msg['iv'])
-        cipher = bytes.fromhex(msg['cipher'])
-        tag = bytes.fromhex(msg['tag'])
-        shared_key = self.compute_shared_x3dh_key_reciever(IPK_A,EPK_A)
+    def x3dh_decrypt(self,msg,IPK_A,EPK_A,OPK_A,sender):
 
-        ad = f"{IPK_A.to_string().hex()}{self.IPK.to_string()}".encode()
+        if self.double_ratchets.get(sender) is None:
+            IPK_A = VerifyingKey.from_string(bytes.fromhex(IPK_A),curve=CURVE)
+            EPK_A = VerifyingKey.from_string(bytes.fromhex(EPK_A),curve=CURVE)
+            self.EPK = EPK_A
+            OPK_A = VerifyingKey.from_string(bytes.fromhex(OPK_A),curve=CURVE)
+            #SPK_A = VerifyingKey.from_string(bytes.fromhex(self.X3DH_bundles[sender]['SPK']),curve=CURVE)
+            shared_key = self.compute_shared_x3dh_key_reciever(IPK_A,EPK_A)
+            double_ratchet = DoubleRatchet(shared_key, self.SPK, self.sk, None)
+            self.double_ratchets[sender] = double_ratchet
 
-        plaintext = aes_gcm_decrypt(shared_key, iv, cipher, ad, tag)   
+        plaintext = self.double_ratchets[sender].decrypt(msg) 
         return plaintext
 
 
-    def x3dh_encrypt(self,key_bundle,message):
-        shared_key, ek, EPK = self.compute_shared_x3dh_key_sender(key_bundle)
-        ad = f"{self.IPK.to_string().hex()}{bytes.fromhex(key_bundle['IPK'])}".encode()
-        iv,cipher,tag = aes_gcm_encrypt(shared_key, message, ad)
-        payload = {"type": "x3dh_encrypted","username":self.username,"IPK":self.IPK.to_string().hex(),"EPK":EPK.to_string().hex(),"OPK":self.OPK.to_string().hex(),"message":{"iv": iv.hex(), "cipher": cipher.hex(), "tag": tag.hex()}}
+    def x3dh_encrypt(self,key_bundle,message,target):
+        if self.double_ratchets.get(target) is None:
+            shared_key, ek, EPK = self.compute_shared_x3dh_key_sender(key_bundle)
+            self.ek = ek
+            self.EPK = EPK
+            double_ratchet = DoubleRatchet(shared_key, self.SPK, self.sk,VerifyingKey.from_string(bytes.fromhex(key_bundle['SPK']),curve=CURVE))
+            self.double_ratchets[target] = double_ratchet
+        
+        
+        body = self.double_ratchets[target].encrypt(message)
+        payload = {"type": "x3dh_encrypted","username":self.username,"IPK":self.IPK.to_string().hex(),"EPK":self.EPK.to_string().hex(),"OPK":self.OPK.to_string().hex(),"body":body}
         return payload
 
     def connect_to_server(self):
@@ -253,7 +260,7 @@ class Client:
                     while target not in self.X3DH_bundles:
                         pass
                 
-                message = self.x3dh_encrypt(self.X3DH_bundles[target],message)
+                message = self.x3dh_encrypt(self.X3DH_bundles[target],message,target)
                 payload = {"type": "message", "username": self.username, "target": target, "message": message}
                 iv,cipher,tag = aes_gcm_encrypt(self.AEK_SK, json.dumps(payload))
                 payload = {"type": "encrypted","iv": iv.hex(), "cipher": cipher.hex(), "tag": tag.hex()}

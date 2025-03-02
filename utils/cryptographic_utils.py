@@ -330,7 +330,7 @@ class DoubleRatchet():
         
         iv, cipher, tag = aes_gcm_encrypt(self.send_message_key, message)
         print(self.send_message_key)
-        payload = {"type":"x3dh_encrypted","PK":self.X.to_string().hex(),"counter":self.send_chain_count, "iv":iv.hex(), "cipher":cipher.hex(), "tag":tag.hex()}
+        payload = {"PK":self.X.to_string().hex(),"counter":self.send_chain_count, "iv":iv.hex(), "cipher":cipher.hex(), "tag":tag.hex()}
         self.send_chain_count += 1
         self.send_chain_key, self.send_message_key = kdf_chain(self.send_chain_key)
 
